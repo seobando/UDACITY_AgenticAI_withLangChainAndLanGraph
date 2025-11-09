@@ -50,9 +50,10 @@ class Agent:
         # Add user question
         messages.append(HumanMessage(content=question))
         
-        # Get response from the agent
+        # Get response from the agent with increased recursion limit
         response = self.graph.invoke(
-            {"messages": messages}
+            {"messages": messages},
+            config={"recursion_limit": 50}  # Increase from default 25 to handle complex queries
         )
         
         return response

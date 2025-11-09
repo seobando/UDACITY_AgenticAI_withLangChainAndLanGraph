@@ -7,8 +7,7 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from langchain_core.tools import tool
-#from langchain_chroma import Chroma
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -411,12 +410,13 @@ def calculate_energy_savings(device_type: str, current_usage_kwh: float,
     """
     Calculate potential energy savings from optimization. Use this tool when users ask about savings from reducing energy usage.
     
-    IMPORTANT: Before using this tool, you should first query current energy usage using query_energy_usage to get accurate current_usage_kwh values.
+    IMPORTANT: Before using this tool, you should first get current energy usage. Try get_recent_energy_summary first (it provides device breakdown), 
+    or use query_energy_usage with a recent date range. Do not keep trying different date ranges if no data is found.
     
     Args:
         device_type (str): Type of device being optimized (e.g., "HVAC", "AC", "air conditioning", "EV", "appliance")
-        current_usage_kwh (float): Current energy usage in kWh (obtain from query_energy_usage first)
-        optimized_usage_kwh (float): Optimized energy usage in kWh (e.g., current_usage_kwh * 0.7 for 30% reduction)
+        current_usage_kwh (float): Current energy usage in kWh per month (obtain from get_recent_energy_summary or query_energy_usage)
+        optimized_usage_kwh (float): Optimized energy usage in kWh per month (e.g., current_usage_kwh * 0.7 for 30% reduction)
         price_per_kwh (float): Price per kWh (default 0.12, or get from get_electricity_prices for accuracy)
     
     Returns:
@@ -424,10 +424,11 @@ def calculate_energy_savings(device_type: str, current_usage_kwh: float,
     
     Example workflow:
     1. User asks: "If I reduce AC usage by 30%, how much would I save?"
-    2. Call query_energy_usage to get current AC usage (e.g., 500 kWh/month)
-    3. Calculate optimized: 500 * 0.7 = 350 kWh/month
-    4. Call this tool: calculate_energy_savings("HVAC", 500, 350, 0.12)
-    5. Present the savings results to the user
+    2. Call get_recent_energy_summary to get current AC usage from device breakdown (e.g., 619.93 kWh/week = ~2686 kWh/month)
+    3. Or call query_energy_usage with last 30 days to get monthly usage
+    4. Calculate optimized: current * 0.7 = optimized kWh/month
+    5. Call this tool: calculate_energy_savings("HVAC", 2686, 1880, 0.12)
+    6. Present the savings results to the user
     """
     savings_kwh = current_usage_kwh - optimized_usage_kwh
     savings_usd = savings_kwh * price_per_kwh
