@@ -409,16 +409,25 @@ def search_energy_tips(query: str, max_results: int = 5) -> Dict[str, Any]:
 def calculate_energy_savings(device_type: str, current_usage_kwh: float, 
                            optimized_usage_kwh: float, price_per_kwh: float = 0.12) -> Dict[str, Any]:
     """
-    Calculate potential energy savings from optimization.
+    Calculate potential energy savings from optimization. Use this tool when users ask about savings from reducing energy usage.
+    
+    IMPORTANT: Before using this tool, you should first query current energy usage using query_energy_usage to get accurate current_usage_kwh values.
     
     Args:
-        device_type (str): Type of device being optimized
-        current_usage_kwh (float): Current energy usage in kWh
-        optimized_usage_kwh (float): Optimized energy usage in kWh
-        price_per_kwh (float): Price per kWh (default 0.12)
+        device_type (str): Type of device being optimized (e.g., "HVAC", "AC", "air conditioning", "EV", "appliance")
+        current_usage_kwh (float): Current energy usage in kWh (obtain from query_energy_usage first)
+        optimized_usage_kwh (float): Optimized energy usage in kWh (e.g., current_usage_kwh * 0.7 for 30% reduction)
+        price_per_kwh (float): Price per kWh (default 0.12, or get from get_electricity_prices for accuracy)
     
     Returns:
-        Dict[str, Any]: Savings calculation results
+        Dict[str, Any]: Savings calculation results including monthly and annual savings
+    
+    Example workflow:
+    1. User asks: "If I reduce AC usage by 30%, how much would I save?"
+    2. Call query_energy_usage to get current AC usage (e.g., 500 kWh/month)
+    3. Calculate optimized: 500 * 0.7 = 350 kWh/month
+    4. Call this tool: calculate_energy_savings("HVAC", 500, 350, 0.12)
+    5. Present the savings results to the user
     """
     savings_kwh = current_usage_kwh - optimized_usage_kwh
     savings_usd = savings_kwh * price_per_kwh
