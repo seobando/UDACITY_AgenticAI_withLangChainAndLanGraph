@@ -7,7 +7,8 @@ import random
 from datetime import datetime, timedelta
 from typing import Dict, Any
 from langchain_core.tools import tool
-from langchain_chroma import Chroma
+#from langchain_chroma import Chroma
+from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.document_loaders import TextLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -16,7 +17,6 @@ from models.energy import DatabaseManager
 # Initialize database manager
 db_manager = DatabaseManager()
 
-# TODO: Implement get_weather_forecast tool
 @tool
 def get_weather_forecast(location: str, days: int = 3) -> Dict[str, Any]:
     """
@@ -51,10 +51,78 @@ def get_weather_forecast(location: str, days: int = 3) -> Dict[str, Any]:
         }
     """
     # Mock weather API or call OpenWeatherMap or similar
+    # Clamp days to valid range
+    days = max(1, min(7, days))
     
-    return 
+    # Generate current weather
+    current_temp = random.randint(15, 30)
+    current_condition = random.choice(["sunny", "partly_cloudy", "cloudy"])
+    current_humidity = random.randint(40, 80)
+    current_wind = round(random.uniform(5, 20), 1)
+    
+    # Generate hourly forecast for the next 24 hours
+    hourly = []
+    base_temp = current_temp
+    
+    for hour in range(24):
+        # Temperature varies throughout the day (cooler at night, warmer during day)
+        if 6 <= hour <= 18:
+            # Daytime hours - warmer
+            temp_variation = random.uniform(-2, 3)
+            temp = base_temp + temp_variation + (hour - 12) * 0.5
+        else:
+            # Nighttime hours - cooler
+            temp_variation = random.uniform(-3, 1)
+            temp = base_temp - 5 + temp_variation
+        
+        # Solar irradiance is highest during midday (10-16) and zero at night
+        if 6 <= hour <= 18:
+            # Peak solar irradiance around noon
+            solar_peak = max(0, 1 - abs(hour - 12) / 6)
+            solar_irradiance = round(random.uniform(0.3, 1.0) * solar_peak * 800, 1)
+        else:
+            solar_irradiance = 0.0
+        
+        # Condition affects solar irradiance
+        if current_condition == "cloudy":
+            solar_irradiance *= 0.3
+        elif current_condition == "partly_cloudy":
+            solar_irradiance *= 0.6
+        
+        # Humidity varies slightly
+        humidity = random.randint(max(30, current_humidity - 10), min(90, current_humidity + 10))
+        
+        # Wind speed varies
+        wind_speed = round(random.uniform(3, 25), 1)
+        
+        # Condition can vary slightly throughout the day
+        condition = current_condition
+        if random.random() < 0.2:  # 20% chance of variation
+            condition = random.choice(["sunny", "partly_cloudy", "cloudy"])
+        
+        hourly.append({
+            "hour": hour,
+            "temperature_c": round(temp, 1),
+            "condition": condition,
+            "solar_irradiance": solar_irradiance,
+            "humidity": humidity,
+            "wind_speed": wind_speed
+        })
+    
+    forecast = {
+        "location": location,
+        "forecast_days": days,
+        "current": {
+            "temperature_c": current_temp,
+            "condition": current_condition,
+            "humidity": current_humidity,
+            "wind_speed": current_wind
+        },
+        "hourly": hourly
+    }
+    
+    return forecast 
 
-# TODO: Implement get_electricity_prices tool
 @tool
 def get_electricity_prices(date: str = None) -> Dict[str, Any]:
     """
@@ -89,8 +157,50 @@ def get_electricity_prices(date: str = None) -> Dict[str, Any]:
     # Then generate hourly rates with peak/off-peak pricing
     # Peak normally between 6 and 22...
     # demand_charge should be 0 if off-peak
-
-    return 
+    
+    base_rate = 0.12  # Base rate in USD per kWh
+    peak_multiplier = 1.5  # Peak hours are 50% more expensive
+    super_peak_multiplier = 2.0  # Super peak hours (evening) are 100% more expensive
+    
+    hourly_rates = []
+    
+    for hour in range(24):
+        # Peak hours: 6 AM to 10 PM (6-22)
+        if 6 <= hour < 22:
+            period = "peak"
+            # Super peak typically in evening (5 PM - 9 PM, hours 17-21)
+            if 17 <= hour < 21:
+                rate = round(base_rate * super_peak_multiplier, 4)
+                demand_charge = round(random.uniform(0.05, 0.15), 4)
+            else:
+                rate = round(base_rate * peak_multiplier, 4)
+                demand_charge = round(random.uniform(0.02, 0.10), 4)
+        else:
+            # Off-peak hours: 10 PM to 6 AM (22-6)
+            period = "off_peak"
+            rate = round(base_rate, 4)
+            demand_charge = 0.0
+        
+        # Add small random variation to make it more realistic
+        rate += round(random.uniform(-0.01, 0.01), 4)
+        rate = max(0.05, rate)  # Ensure minimum rate
+        
+        hourly_rates.append({
+            "hour": hour,
+            "rate": rate,
+            "period": period,
+            "demand_charge": demand_charge
+        })
+    
+    prices = {
+        "date": date,
+        "pricing_type": "time_of_use",
+        "currency": "USD",
+        "unit": "per_kWh",
+        "hourly_rates": hourly_rates
+    }
+    
+    return prices 
 
 @tool
 def query_energy_usage(start_date: str, end_date: str, device_type: str = None) -> Dict[str, Any]:

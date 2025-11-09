@@ -32,6 +32,21 @@ sessions/
 logs/
 *.log
 
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Vector stores and embeddings
+**/vectorstore/
+**/embeddings/
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Data files (keep documents, ignore generated data)
+# Note: data/documents/ should be tracked, but generated files should not
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage
 from langgraph.prebuilt import create_react_agent
 from tools import TOOL_KIT
 
@@ -15,14 +15,16 @@ class Agent:
         llm = ChatOpenAI(
             model=model,
             temperature=0.0,
-            base_url="https://openai.vocareum.com/v1",
-            api_key=os.getenv("VOCAREUM_API_KEY")
+            #base_url="https://openai.vocareum.com/v1",
+            #api_key=os.getenv("VOCAREUM_API_KEY")
+            api_key=os.getenv("OPENAI_API_KEY")
         )
+
+        # Store instructions for use in invoke
+        self.instructions = instructions
 
         # Create the Energy Advisor agent
         self.graph = create_react_agent(
-            name="energy_advisor",
-            prompt=SystemMessage(content=instructions),
             model=llm,
             tools=TOOL_KIT,
         )
@@ -33,28 +35,24 @@ class Agent:
         
         Args:
             question (str): The user's question about energy optimization
-            location (str): Location for weather and pricing data
+            context (str): Additional context (e.g., location for weather and pricing data)
         
         Returns:
             str: The advisor's response with recommendations
         """
+        # Build messages list starting with system message
+        messages = [SystemMessage(content=self.instructions)]
         
-        messages = []
         if context:
-            # Add some context to the question as a system message
-            messages.append(
-                ("system", context)
-            )
+            # Add context as additional system message
+            messages.append(SystemMessage(content=f"Additional context: {context}"))
 
-        messages.append(
-            ("user", question)
-        )
+        # Add user question
+        messages.append(HumanMessage(content=question))
         
         # Get response from the agent
         response = self.graph.invoke(
-            input= {
-                "messages": messages
-            }
+            {"messages": messages}
         )
         
         return response
