@@ -25,6 +25,13 @@ from agentic.tools import (
     create_refund_tool,
 )
 
+# Import logging and memory
+from agentic.logging_config import setup_logging, get_logger
+from agentic.memory import save_conversation_to_database, save_resolved_issue
+
+# Setup logging
+logger = setup_logging()
+
 
 class AgentState(TypedDict, total=False):
     """State for the agent workflow."""
@@ -34,6 +41,9 @@ class AgentState(TypedDict, total=False):
     escalation_requested: bool
     escalated: bool
     _next_agent: str  # Internal routing decision (not persisted)
+    _thread_id: str  # Thread ID for logging and persistence
+    _user_id: str  # User ID for persistence
+    _account_id: str  # Account ID for persistence
 
 
 def create_orchestrator():
@@ -64,33 +74,106 @@ def create_orchestrator():
     # Helper function to wrap supervisor and extract routing
     def supervisor_node(state: AgentState) -> dict:
         """Supervisor node that updates state and determines routing."""
-        print("DEBUG: supervisor_node called in workflow")
+        thread_id = state.get("_thread_id", "unknown")
+        logger.info(
+            "Supervisor node called",
+            extra={
+                "agent": "supervisor",
+                "thread_id": thread_id,
+                "messages_count": len(state.get("messages", [])),
+                "has_classification": state.get("classification") is not None,
+            }
+        )
+        
         result = supervisor(state)
-        print(f"DEBUG: supervisor returned: {result}")
-        # Get next_agent from result (don't pop, keep it for state)
         next_agent = result.get("next_agent", "end")
-        # Store next_agent in state for routing function (use a key that will be in state)
         result["_next_agent"] = next_agent
-        print(f"DEBUG: supervisor_node routing to: {next_agent}, setting _next_agent in result")
+        
+        logger.info(
+            "Supervisor routing decision",
+            extra={
+                "agent": "supervisor",
+                "thread_id": thread_id,
+                "routing_decision": next_agent,
+                "classification": state.get("classification"),
+                "resolution_attempted": state.get("resolution_attempted", False),
+            }
+        )
+        
         return result
     
-    # Wrap nodes with debugging
+    # Wrap nodes with logging
     def classifier_node(state: AgentState) -> dict:
-        print("DEBUG: classifier_node called in workflow")
+        thread_id = state.get("_thread_id", "unknown")
+        logger.info(
+            "Classifier node called",
+            extra={
+                "agent": "classifier",
+                "thread_id": thread_id,
+            }
+        )
+        
         result = classifier(state)
-        print(f"DEBUG: classifier returned: {result}")
+        
+        if result.get("classification"):
+            logger.info(
+                "Ticket classified",
+                extra={
+                    "agent": "classifier",
+                    "thread_id": thread_id,
+                    "classification": result["classification"],
+                }
+            )
+        
         return result
     
     def resolver_node(state: AgentState) -> dict:
-        print("DEBUG: resolver_node called in workflow")
+        thread_id = state.get("_thread_id", "unknown")
+        logger.info(
+            "Resolver node called",
+            extra={
+                "agent": "resolver",
+                "thread_id": thread_id,
+                "classification": state.get("classification"),
+            }
+        )
+        
         result = resolver(state)
-        print(f"DEBUG: resolver returned: {result}")
+        
+        logger.info(
+            "Resolution attempted",
+            extra={
+                "agent": "resolver",
+                "thread_id": thread_id,
+                "resolution_attempted": result.get("resolution_attempted", False),
+                "escalation_requested": result.get("escalation_requested", False),
+            }
+        )
+        
         return result
     
     def escalation_node(state: AgentState) -> dict:
-        print("DEBUG: escalation_node called in workflow")
+        thread_id = state.get("_thread_id", "unknown")
+        logger.info(
+            "Escalation node called",
+            extra={
+                "agent": "escalation",
+                "thread_id": thread_id,
+                "classification": state.get("classification"),
+            }
+        )
+        
         result = escalation(state)
-        print(f"DEBUG: escalation returned: {result}")
+        
+        logger.info(
+            "Ticket escalated",
+            extra={
+                "agent": "escalation",
+                "thread_id": thread_id,
+                "outcome": "escalated",
+            }
+        )
+        
         return result
     
     # Add nodes
@@ -105,10 +188,18 @@ def create_orchestrator():
     # Add conditional edges from supervisor
     def route_from_supervisor(state: AgentState) -> Literal["classifier", "resolver", "escalation", "end"]:
         """Route based on supervisor decision stored in state."""
-        # Check both _next_agent and next_agent (in case it wasn't removed)
         route = state.get("_next_agent") or state.get("next_agent", "end")
-        print(f"DEBUG: route_from_supervisor - state keys: {list(state.keys())}, _next_agent: {state.get('_next_agent')}, next_agent: {state.get('next_agent')}")
-        print(f"DEBUG: route_from_supervisor returning: {route}")
+        thread_id = state.get("_thread_id", "unknown")
+        
+        logger.debug(
+            "Routing from supervisor",
+            extra={
+                "agent": "supervisor",
+                "thread_id": thread_id,
+                "routing_decision": route,
+            }
+        )
+        
         return route
     
     workflow.add_conditional_edges(

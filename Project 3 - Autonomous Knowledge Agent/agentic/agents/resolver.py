@@ -4,6 +4,10 @@ from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 from langchain_core.tools import Tool
 from typing import List
+from agentic.logging_config import get_logger
+from agentic.memory import get_historical_context
+
+logger = get_logger()
 
 
 def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
@@ -30,19 +34,34 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
     
     def resolver_agent(state: dict) -> dict:
         """Attempt to resolve the ticket using available tools."""
-        print("DEBUG: Resolver agent called")  # Debug line
+        thread_id = state.get("_thread_id", "unknown")
+        user_id = state.get("_user_id", "unknown")
+        account_id = state.get("_account_id", "cultpass")
+        
         messages = state.get("messages", [])
         classification = state.get("classification", {})
         
-        print(f"DEBUG: Messages count: {len(messages)}, Classification: {classification}")  # Debug line
+        logger.debug(
+            "Resolver agent processing",
+            extra={
+                "agent": "resolver",
+                "thread_id": thread_id,
+                "messages_count": len(messages),
+                "classification": classification,
+            }
+        )
         
         if not messages:
-            print("DEBUG: No messages, returning empty")  # Debug line
             return {"messages": [], "resolution_attempted": True}
         
         # Get the current ticket/question
         current_message = messages[-1]
-        print(f"DEBUG: Current message: {current_message.content[:50] if hasattr(current_message, 'content') else 'No content'}")  # Debug line
+        
+        # Get historical context for personalized responses
+        historical_context = ""
+        if classification and user_id != "unknown":
+            issue_type = classification.get("issue_type", "unknown")
+            historical_context = get_historical_context(user_id, issue_type, account_id)
         
         # Add context about the classification
         context_message = ""
@@ -51,8 +70,13 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
                 f"Ticket Classification: {classification.get('issue_type', 'unknown')} "
                 f"(Urgency: {classification.get('urgency', 'medium')}, "
                 f"Confidence: {classification.get('confidence', 0.5):.2f})\n"
-                f"Summary: {classification.get('summary', 'N/A')}\n\n"
+                f"Summary: {classification.get('summary', 'N/A')}\n"
             )
+            
+            if historical_context:
+                context_message += f"\nHistorical Context: {historical_context}\n"
+            
+            context_message += "\n"
         
         # Build the conversation for the LLM
         conversation_messages = [
@@ -61,14 +85,18 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
         ]
         
         try:
-            print("DEBUG: Invoking LLM with tools...")  # Debug line
             # Get initial response from LLM (may include tool calls)
             response = llm_with_tools.invoke(conversation_messages)
-            print(f"DEBUG: LLM response received: {type(response)}, has content: {hasattr(response, 'content')}")  # Debug line
             
             # Ensure we have a valid response
             if not response:
-                print("DEBUG: No response from LLM")  # Debug line
+                logger.warning(
+                    "No response from LLM",
+                    extra={
+                        "agent": "resolver",
+                        "thread_id": thread_id,
+                    }
+                )
                 return {
                     "messages": [AIMessage(content="I'm having trouble processing your request. Please try again.")],
                     "resolution_attempted": True,
@@ -101,8 +129,28 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
                     
                     if tool:
                         try:
+                            logger.info(
+                                "Tool invoked",
+                                extra={
+                                    "agent": "resolver",
+                                    "thread_id": thread_id,
+                                    "tool_name": tool_name,
+                                    "tool_args": tool_args,
+                                }
+                            )
+                            
                             # Execute the tool
                             tool_result = tool.invoke(tool_args)
+                            
+                            logger.info(
+                                "Tool execution completed",
+                                extra={
+                                    "agent": "resolver",
+                                    "thread_id": thread_id,
+                                    "tool_name": tool_name,
+                                    "tool_result_length": len(str(tool_result)),
+                                }
+                            )
                             
                             # Add tool result to conversation
                             from langchain_core.messages import ToolMessage
@@ -113,6 +161,16 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
                                 )
                             )
                         except Exception as e:
+                            logger.error(
+                                "Tool execution error",
+                                extra={
+                                    "agent": "resolver",
+                                    "thread_id": thread_id,
+                                    "tool_name": tool_name,
+                                    "error": str(e),
+                                }
+                            )
+                            
                             # Add error message
                             from langchain_core.messages import ToolMessage
                             conversation_messages.append(
@@ -140,7 +198,6 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
             
             # If no tool calls, return the response directly
             if response and hasattr(response, 'content') and response.content:
-                print(f"DEBUG: Returning AI response (no tools): {response.content[:100]}")  # Debug line
                 return {
                     "messages": [AIMessage(content=response.content)],
                     "resolution_attempted": True,
@@ -159,9 +216,15 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
             }
             
         except Exception as e:
-            print(f"Error in resolver agent: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(
+                "Resolver agent error",
+                extra={
+                    "agent": "resolver",
+                    "thread_id": thread_id,
+                    "error": str(e),
+                },
+                exc_info=True
+            )
             return {
                 "messages": [AIMessage(content=f"I encountered an error while processing your request: {str(e)}. Let me escalate this to human support.")],
                 "resolution_attempted": True,

@@ -5,6 +5,9 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 from typing import Optional
+from agentic.logging_config import get_logger
+
+logger = get_logger()
 
 
 class TicketClassification(BaseModel):
@@ -50,10 +53,17 @@ def create_classifier_agent(llm: ChatOpenAI):
     
     def classifier_agent(state: dict) -> dict:
         """Classify the ticket and update state."""
-        print("DEBUG: Classifier agent called")  # Debug line
+        thread_id = state.get("_thread_id", "unknown")
+        
         messages = state.get("messages", [])
         if not messages:
-            print("DEBUG: Classifier - No messages")  # Debug line
+            logger.warning(
+                "Classifier called with no messages",
+                extra={
+                    "agent": "classifier",
+                    "thread_id": thread_id,
+                }
+            )
             return {"classification": None}
         
         # Get the ticket content from the last user message
@@ -78,18 +88,34 @@ def create_classifier_agent(llm: ChatOpenAI):
                 classification_prompt.format_messages(ticket_content=full_context)
             )
             
-            return {
-                "classification": {
-                    "issue_type": classification.issue_type,
-                    "urgency": classification.urgency,
-                    "confidence": classification.confidence,
-                    "tags": classification.tags,
-                    "summary": classification.summary,
-                }
+            classification_dict = {
+                "issue_type": classification.issue_type,
+                "urgency": classification.urgency,
+                "confidence": classification.confidence,
+                "tags": classification.tags,
+                "summary": classification.summary,
             }
+            
+            logger.info(
+                "Ticket classified successfully",
+                extra={
+                    "agent": "classifier",
+                    "thread_id": thread_id,
+                    "classification": classification_dict,
+                }
+            )
+            
+            return {"classification": classification_dict}
         except Exception as e:
             # Fallback classification
-            print(f"Error in classification: {e}")
+            logger.error(
+                "Classification error",
+                extra={
+                    "agent": "classifier",
+                    "thread_id": thread_id,
+                    "error": str(e),
+                }
+            )
             return {
                 "classification": {
                     "issue_type": "other",

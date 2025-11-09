@@ -3,6 +3,9 @@
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
+from agentic.logging_config import get_logger
+
+logger = get_logger()
 
 
 def create_escalation_agent(llm: ChatOpenAI):
@@ -26,9 +29,21 @@ def create_escalation_agent(llm: ChatOpenAI):
     
     def escalation_agent(state: dict) -> dict:
         """Handle ticket escalation."""
+        thread_id = state.get("_thread_id", "unknown")
+        
         messages = state.get("messages", [])
         classification = state.get("classification", {})
         resolution_attempted = state.get("resolution_attempted", False)
+        
+        logger.info(
+            "Escalation agent processing",
+            extra={
+                "agent": "escalation",
+                "thread_id": thread_id,
+                "classification": classification,
+                "resolution_attempted": resolution_attempted,
+            }
+        )
         
         # Get ticket content
         ticket_content = messages[-1].content if messages else "No ticket content available"
@@ -74,7 +89,15 @@ def create_escalation_agent(llm: ChatOpenAI):
             }
             
         except Exception as e:
-            print(f"Error in escalation agent: {e}")
+            logger.error(
+                "Escalation agent error",
+                extra={
+                    "agent": "escalation",
+                    "thread_id": thread_id,
+                    "error": str(e),
+                },
+                exc_info=True
+            )
             return {
                 "messages": [AIMessage(
                     content=(

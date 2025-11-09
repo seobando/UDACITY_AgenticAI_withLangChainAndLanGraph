@@ -81,7 +81,14 @@ def model_to_dict(instance):
         for column in instance.__table__.columns
     }
 
-def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", verbose: bool = True):
+def send_message(
+    agent: CompiledStateGraph, 
+    message: str, 
+    ticket_id: str = "1", 
+    user_id: str = "a4ab87",  # Default user ID
+    account_id: str = "cultpass",
+    verbose: bool = True
+):
     """
     Send a single message to the agent and get a response.
     Jupyter-friendly version that works better than the interactive chat_interface.
@@ -90,6 +97,8 @@ def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", 
         agent: The LangGraph orchestrator
         message: The user's message
         ticket_id: The conversation thread ID (default: "1")
+        user_id: External user ID (default: "a4ab87")
+        account_id: Account ID (default: "cultpass")
         verbose: Whether to print the conversation (default: True)
     
     Returns:
@@ -98,10 +107,18 @@ def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", 
     if not message.strip():
         return "Please provide a message."
     
-    # Prepare input with just the new message
-    # State will be loaded from checkpointer
+    # Import here to avoid circular imports
+    from agentic.memory import save_conversation_to_database, save_resolved_issue
+    from agentic.logging_config import get_logger
+    
+    logger = get_logger()
+    
+    # Prepare input with metadata for persistence
     trigger = {
         "messages": [HumanMessage(content=message)],
+        "_thread_id": ticket_id,
+        "_user_id": user_id,
+        "_account_id": account_id,
     }
     
     config = {
@@ -114,10 +131,69 @@ def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", 
         if verbose:
             print(f"User: {message}\n")
         
+        logger.info(
+            "Processing user message",
+            extra={
+                "ticket_id": ticket_id,
+                "user_id": user_id,
+                "message_length": len(message),
+            }
+        )
+        
         result = agent.invoke(input=trigger, config=config)
         
         # Get the last AI message
         messages = result.get("messages", [])
+        classification = result.get("classification")
+        escalated = result.get("escalated", False)
+        resolution_attempted = result.get("resolution_attempted", False)
+        
+        # Determine resolution status
+        if escalated:
+            resolution_status = "escalated"
+        elif resolution_attempted:
+            resolution_status = "resolved"
+        else:
+            resolution_status = "open"
+        
+        # Save conversation to database
+        try:
+            save_conversation_to_database(
+                ticket_id=ticket_id,
+                account_id=account_id,
+                user_id=user_id,
+                messages=messages,
+                classification=classification,
+                resolution_status=resolution_status,
+            )
+            
+            # If resolved, save to long-term memory
+            if resolution_status == "resolved" and classification:
+                save_resolved_issue(
+                    ticket_id=ticket_id,
+                    issue_type=classification.get("issue_type", "unknown"),
+                    resolution_summary=f"Resolved via {classification.get('issue_type', 'unknown')}",
+                    account_id=account_id,
+                )
+            
+            logger.info(
+                "Conversation saved to database",
+                extra={
+                    "ticket_id": ticket_id,
+                    "user_id": user_id,
+                    "messages_count": len(messages),
+                    "resolution_status": resolution_status,
+                }
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to save conversation to database",
+                extra={
+                    "ticket_id": ticket_id,
+                    "error": str(e),
+                }
+            )
+        
         if messages:
             # Find the last AIMessage (skip HumanMessage and SystemMessage)
             ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
@@ -127,6 +203,16 @@ def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", 
                 response = ai_messages[-1].content
                 if verbose:
                     print(f"Assistant: {response}\n")
+                
+                logger.info(
+                    "Response generated",
+                    extra={
+                        "ticket_id": ticket_id,
+                        "response_length": len(response),
+                        "outcome": resolution_status,
+                    }
+                )
+                
                 return response
             else:
                 # Debug: show what messages we have
@@ -155,7 +241,20 @@ def send_message(agent: CompiledStateGraph, message: str, ticket_id: str = "1", 
             return response
             
     except Exception as e:
+        from agentic.logging_config import get_logger
+        logger = get_logger()
+        
         error_msg = f"I encountered an error: {str(e)}"
+        logger.error(
+            "Error processing message",
+            extra={
+                "ticket_id": ticket_id,
+                "user_id": user_id,
+                "error": str(e),
+            },
+            exc_info=True
+        )
+        
         if verbose:
             print(f"Assistant: {error_msg}\n")
             import traceback
