@@ -30,14 +30,19 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
     
     def resolver_agent(state: dict) -> dict:
         """Attempt to resolve the ticket using available tools."""
+        print("DEBUG: Resolver agent called")  # Debug line
         messages = state.get("messages", [])
         classification = state.get("classification", {})
         
+        print(f"DEBUG: Messages count: {len(messages)}, Classification: {classification}")  # Debug line
+        
         if not messages:
+            print("DEBUG: No messages, returning empty")  # Debug line
             return {"messages": [], "resolution_attempted": True}
         
         # Get the current ticket/question
         current_message = messages[-1]
+        print(f"DEBUG: Current message: {current_message.content[:50] if hasattr(current_message, 'content') else 'No content'}")  # Debug line
         
         # Add context about the classification
         context_message = ""
@@ -56,11 +61,14 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
         ]
         
         try:
+            print("DEBUG: Invoking LLM with tools...")  # Debug line
             # Get initial response from LLM (may include tool calls)
             response = llm_with_tools.invoke(conversation_messages)
+            print(f"DEBUG: LLM response received: {type(response)}, has content: {hasattr(response, 'content')}")  # Debug line
             
             # Ensure we have a valid response
             if not response:
+                print("DEBUG: No response from LLM")  # Debug line
                 return {
                     "messages": [AIMessage(content="I'm having trouble processing your request. Please try again.")],
                     "resolution_attempted": True,
@@ -132,6 +140,7 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
             
             # If no tool calls, return the response directly
             if response and hasattr(response, 'content') and response.content:
+                print(f"DEBUG: Returning AI response (no tools): {response.content[:100]}")  # Debug line
                 return {
                     "messages": [AIMessage(content=response.content)],
                     "resolution_attempted": True,

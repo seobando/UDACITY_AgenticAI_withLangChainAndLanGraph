@@ -50,8 +50,10 @@ def create_classifier_agent(llm: ChatOpenAI):
     
     def classifier_agent(state: dict) -> dict:
         """Classify the ticket and update state."""
+        print("DEBUG: Classifier agent called")  # Debug line
         messages = state.get("messages", [])
         if not messages:
+            print("DEBUG: Classifier - No messages")  # Debug line
             return {"classification": None}
         
         # Get the ticket content from the last user message

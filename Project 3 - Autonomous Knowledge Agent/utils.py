@@ -6,7 +6,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from contextlib import contextmanager
 from langchain_core.messages import (
     SystemMessage,
-    HumanMessage,
+    HumanMessage, 
     AIMessage,
 )
 from langgraph.graph.state import CompiledStateGraph
@@ -16,15 +16,47 @@ Base = declarative_base()
 
 def reset_db(db_path: str, echo: bool = True):
     """Drops the existing udahub.db file and recreates all tables."""
+    import time
+    import sqlite3
+    
+    # Close any existing connections to the database
+    # First, try to create a connection with check_same_thread=False to close any locks
+    try:
+        # Try to connect and close any existing connections
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.close()
+        time.sleep(0.1)  # Small delay to allow file system to release the lock
+    except Exception:
+        pass  # If connection fails, continue anyway
 
     # Remove the file if it exists
     if os.path.exists(db_path):
-        os.remove(db_path)
-        print(f"✅ Removed existing {db_path}")
+        max_retries = 5
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                os.remove(db_path)
+                print(f"✅ Removed existing {db_path}")
+                break
+            except PermissionError as e:
+                retry_count += 1
+                if retry_count < max_retries:
+                    print(f"⚠️  Database file is locked. Retrying ({retry_count}/{max_retries})...")
+                    time.sleep(0.5)
+                else:
+                    print(f"❌ Could not delete {db_path} - file is locked by another process.")
+                    print("💡 Solution: Close all database connections and restart the Jupyter kernel, then try again.")
+                    raise PermissionError(
+                        f"Database file '{db_path}' is locked. "
+                        "Please close all database connections (restart kernel) and try again."
+                    ) from e
 
     # Create a new engine and recreate tables
-    engine = create_engine(f"sqlite:///{db_path}", echo=echo)
+    engine = create_engine(f"sqlite:///{db_path}", echo=echo, connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
+    
+    # Ensure the engine is properly closed
+    engine.dispose()
     print(f"✅ Recreated {db_path} with fresh schema")
 
 

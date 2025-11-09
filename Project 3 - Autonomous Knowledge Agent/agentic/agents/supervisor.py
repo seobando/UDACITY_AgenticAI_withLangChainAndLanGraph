@@ -17,7 +17,10 @@ def create_supervisor_agent(llm: ChatOpenAI):
         """
         messages = state.get("messages", [])
         if not messages:
+            print("DEBUG: Supervisor - No messages, ending")  # Debug line
             return {"next_agent": "end"}
+        
+        print(f"DEBUG: Supervisor - Messages: {len(messages)}, Classification: {state.get('classification')}, Resolution attempted: {state.get('resolution_attempted', False)}")  # Debug line
         
         # Get the last user message
         last_message = messages[-1].content if messages and hasattr(messages[-1], 'content') else ""
@@ -38,10 +41,12 @@ def create_supervisor_agent(llm: ChatOpenAI):
         
         # If we don't have a classification yet, route to classifier
         if not classification:
+            print("DEBUG: Supervisor - Routing to classifier")  # Debug line
             return {"next_agent": "classifier"}
         
         # If we have classification but haven't attempted resolution, route to resolver
         if classification and not resolution_attempted:
+            print("DEBUG: Supervisor - Routing to resolver")  # Debug line
             return {"next_agent": "resolver"}
         
         # If resolution was attempted, check if we need to continue or end

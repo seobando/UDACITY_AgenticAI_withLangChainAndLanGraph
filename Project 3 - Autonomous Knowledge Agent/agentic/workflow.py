@@ -33,6 +33,7 @@ class AgentState(TypedDict, total=False):
     resolution_attempted: bool
     escalation_requested: bool
     escalated: bool
+    _next_agent: str  # Internal routing decision (not persisted)
 
 
 def create_orchestrator():
@@ -63,18 +64,40 @@ def create_orchestrator():
     # Helper function to wrap supervisor and extract routing
     def supervisor_node(state: AgentState) -> dict:
         """Supervisor node that updates state and determines routing."""
+        print("DEBUG: supervisor_node called in workflow")
         result = supervisor(state)
-        # Extract next_agent before returning state updates
-        next_agent = result.pop("next_agent", "end")
-        # Store next_agent in state for routing function
+        print(f"DEBUG: supervisor returned: {result}")
+        # Get next_agent from result (don't pop, keep it for state)
+        next_agent = result.get("next_agent", "end")
+        # Store next_agent in state for routing function (use a key that will be in state)
         result["_next_agent"] = next_agent
+        print(f"DEBUG: supervisor_node routing to: {next_agent}, setting _next_agent in result")
+        return result
+    
+    # Wrap nodes with debugging
+    def classifier_node(state: AgentState) -> dict:
+        print("DEBUG: classifier_node called in workflow")
+        result = classifier(state)
+        print(f"DEBUG: classifier returned: {result}")
+        return result
+    
+    def resolver_node(state: AgentState) -> dict:
+        print("DEBUG: resolver_node called in workflow")
+        result = resolver(state)
+        print(f"DEBUG: resolver returned: {result}")
+        return result
+    
+    def escalation_node(state: AgentState) -> dict:
+        print("DEBUG: escalation_node called in workflow")
+        result = escalation(state)
+        print(f"DEBUG: escalation returned: {result}")
         return result
     
     # Add nodes
     workflow.add_node("supervisor", supervisor_node)
-    workflow.add_node("classifier", classifier)
-    workflow.add_node("resolver", resolver)
-    workflow.add_node("escalation", escalation)
+    workflow.add_node("classifier", classifier_node)
+    workflow.add_node("resolver", resolver_node)
+    workflow.add_node("escalation", escalation_node)
     
     # Set entry point
     workflow.set_entry_point("supervisor")
@@ -82,7 +105,11 @@ def create_orchestrator():
     # Add conditional edges from supervisor
     def route_from_supervisor(state: AgentState) -> Literal["classifier", "resolver", "escalation", "end"]:
         """Route based on supervisor decision stored in state."""
-        return state.get("_next_agent", "end")
+        # Check both _next_agent and next_agent (in case it wasn't removed)
+        route = state.get("_next_agent") or state.get("next_agent", "end")
+        print(f"DEBUG: route_from_supervisor - state keys: {list(state.keys())}, _next_agent: {state.get('_next_agent')}, next_agent: {state.get('next_agent')}")
+        print(f"DEBUG: route_from_supervisor returning: {route}")
+        return route
     
     workflow.add_conditional_edges(
         "supervisor",
