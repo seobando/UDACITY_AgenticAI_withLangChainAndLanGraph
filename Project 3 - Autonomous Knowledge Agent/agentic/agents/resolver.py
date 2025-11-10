@@ -19,17 +19,20 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
     system_prompt = (
         "You are a helpful customer support agent for CultPass. "
         "Your goal is to resolve customer issues efficiently and accurately. "
-        "Use the available tools to look up information, search the knowledge base, "
-        "and provide helpful responses to customers.\n\n"
+        "IMPORTANT: You MUST always call search_knowledge_base first before answering any question. "
+        "All responses must be grounded in knowledge base articles.\n\n"
         "Guidelines:\n"
+        "- ALWAYS call search_knowledge_base tool first for every customer question\n"
+        "- Tool responses are in JSON format - parse them to extract structured data\n"
+        "- For knowledge base results: Include the article title(s) and key information in your response\n"
+        "- For database lookups: Format the structured data (user info, subscription details, etc.) clearly\n"
+        "- If search_knowledge_base returns success=false or 'No relevant information found', you cannot answer and must escalate\n"
         "- Always be polite and professional\n"
-        "- Use tools to get accurate information before responding\n"
-        "- If you cannot resolve an issue, suggest escalating to human support\n"
-        "- For login issues, guide users through password reset\n"
-        "- For subscription questions, check their subscription status first\n"
-        "- For reservation issues, look up their reservations\n"
+        "- Use other tools (lookup_user, lookup_subscription, etc.) as needed for specific user data\n"
+        "- Format tool results clearly in your response to the customer\n"
+        "- If you cannot resolve an issue with knowledge base articles, suggest escalating to human support\n"
         "- Only process refunds if explicitly approved (use refund tool with caution)\n"
-        "- Provide clear, actionable solutions\n"
+        "- Provide clear, actionable solutions based on knowledge base content\n"
     )
     
     def resolver_agent(state: dict) -> dict:
@@ -84,8 +87,125 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
             current_message
         ]
         
+        # Find the search_knowledge_base tool
+        kb_tool = None
+        for t in tools:
+            if t.name == "search_knowledge_base":
+                kb_tool = t
+                break
+        
+        # Track if KB was searched and results
+        kb_searched = False
+        kb_results = None
+        kb_has_results = False
+        
         try:
-            # Get initial response from LLM (may include tool calls)
+            # ENFORCE KB GROUNDING: Always search KB first
+            if kb_tool and current_message and hasattr(current_message, 'content'):
+                query = current_message.content
+                try:
+                    logger.info(
+                        "Enforcing KB grounding - searching knowledge base",
+                        extra={
+                            "agent": "resolver",
+                            "thread_id": thread_id,
+                            "query": query[:100],
+                        }
+                    )
+                    
+                    kb_results = kb_tool.invoke({"query": query})
+                    kb_searched = True
+                    
+                    # Parse KB results (JSON format)
+                    try:
+                        import json
+                        kb_data = json.loads(str(kb_results)) if isinstance(kb_results, str) else kb_results
+                        if isinstance(kb_data, str):
+                            kb_data = json.loads(kb_data)
+                        
+                        # Check if KB returned successful results
+                        if kb_data.get("success") and kb_data.get("articles") and len(kb_data.get("articles", [])) > 0:
+                            kb_has_results = True
+                        else:
+                            kb_has_results = False
+                    except (json.JSONDecodeError, AttributeError):
+                        # Fallback: check string content
+                        if kb_results and "No relevant information found" not in str(kb_results) and "success" not in str(kb_results).lower():
+                            kb_has_results = True
+                        else:
+                            kb_has_results = False
+                    
+                    if kb_has_results:
+                        # Add KB results to conversation
+                        from langchain_core.messages import ToolMessage
+                        conversation_messages.append(
+                            ToolMessage(
+                                content=str(kb_results),
+                                tool_call_id="kb_search_enforced"
+                            )
+                        )
+                        logger.info(
+                            "KB search completed with results",
+                            extra={
+                                "agent": "resolver",
+                                "thread_id": thread_id,
+                                "kb_has_results": True,
+                            }
+                        )
+                    else:
+                        kb_has_results = False
+                        logger.warning(
+                            "KB search returned no results - will escalate",
+                            extra={
+                                "agent": "resolver",
+                                "thread_id": thread_id,
+                                "kb_has_results": False,
+                            }
+                        )
+                except Exception as e:
+                    logger.error(
+                        "KB search error",
+                        extra={
+                            "agent": "resolver",
+                            "thread_id": thread_id,
+                            "error": str(e),
+                        }
+                    )
+                    kb_has_results = False
+            
+            # Check confidence - low confidence should escalate
+            confidence = classification.get("confidence", 1.0) if classification else 1.0
+            if confidence < 0.5:
+                logger.info(
+                    "Low confidence classification - escalating",
+                    extra={
+                        "agent": "resolver",
+                        "thread_id": thread_id,
+                        "confidence": confidence,
+                    }
+                )
+                return {
+                    "messages": [AIMessage(content="I'm not confident I can help with this issue. Let me escalate this to a human agent who can assist you better.")],
+                    "resolution_attempted": True,
+                    "escalation_requested": True,
+                }
+            
+            # If KB search found no results, escalate
+            if kb_searched and not kb_has_results:
+                logger.info(
+                    "No KB results found - escalating",
+                    extra={
+                        "agent": "resolver",
+                        "thread_id": thread_id,
+                    }
+                )
+                return {
+                    "messages": [AIMessage(content="I couldn't find relevant information in our knowledge base to help with your question. Let me escalate this to a human support agent who can assist you better.")],
+                    "resolution_attempted": True,
+                    "escalation_requested": True,
+                }
+            
+            # Get initial response from LLM (may include additional tool calls)
             response = llm_with_tools.invoke(conversation_messages)
             
             # Ensure we have a valid response

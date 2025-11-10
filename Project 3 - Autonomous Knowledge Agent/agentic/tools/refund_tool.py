@@ -1,7 +1,9 @@
 """Refund tool for processing refunds (requires approval)."""
 
+import json
 from langchain_core.tools import tool
 from typing import Optional
+from datetime import datetime
 
 
 def create_refund_tool():
@@ -24,33 +26,31 @@ def create_refund_tool():
             reason: The reason for the refund.
         
         Returns:
-            Status of the refund request.
+            JSON string with structured refund request status.
         """
         # In a real system, this would integrate with payment processing
         # For now, this is a simulation that requires approval
         
         if not reason:
-            return (
-                "Error: Refund reason is required. "
-                "Refunds can only be processed with approval from support lead. "
-                "Please escalate this request."
-            )
+            return json.dumps({
+                "success": False,
+                "error": "Refund reason is required. Refunds can only be processed with approval from support lead. Please escalate this request."
+            })
         
-        # Check if this is within the refund policy
-        refund_policy_note = (
-            "Note: Refunds are typically only available for cancelled subscriptions "
-            "within 7 days of signup. This request requires manual approval."
-        )
+        refund_id = f"REF-{hash(f'{user_id}{reason}{datetime.now()}') % 10000:04d}"
         
-        return (
-            f"Refund request submitted for user {user_id}:\n"
-            f"- Reason: {reason}\n"
-            f"- Amount: {amount if amount else 'To be calculated'}\n"
-            f"- Status: Pending approval from support lead\n\n"
-            f"{refund_policy_note}\n\n"
-            f"Action required: This refund request has been logged and requires "
-            f"manual review and approval before processing."
-        )
+        return json.dumps({
+            "success": True,
+            "refund_request": {
+                "refund_id": refund_id,
+                "user_id": user_id,
+                "amount": amount,
+                "reason": reason,
+                "status": "pending_approval",
+                "submitted_at": datetime.now().isoformat(),
+                "note": "Refunds are typically only available for cancelled subscriptions within 7 days of signup. This request requires manual approval."
+            }
+        })
     
     return process_refund
 

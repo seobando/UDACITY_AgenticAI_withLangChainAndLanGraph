@@ -1,7 +1,8 @@
 """RAG tool for retrieving knowledge base articles."""
 
 import os
-from typing import List, Optional
+import json
+from typing import List, Optional, Dict, Any
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from langchain_core.tools import tool
@@ -49,9 +50,13 @@ def create_rag_tool(account_id: str = "cultpass"):
                 query: The search query about CultPass features, policies, or procedures.
             
             Returns:
-                Relevant information from the knowledge base.
+                JSON string with structured knowledge base results.
             """
-            return "No knowledge base articles available."
+            return json.dumps({
+                "success": False,
+                "error": "No knowledge base articles available.",
+                "articles": []
+            })
         
         return search_knowledge_base
     
@@ -81,7 +86,7 @@ def create_rag_tool(account_id: str = "cultpass"):
                 query: The search query about CultPass features, policies, or procedures.
             
             Returns:
-                Relevant information from the knowledge base.
+                JSON string with structured knowledge base results including article titles and excerpts.
             """
             query_lower = query.lower()
             results = []
@@ -100,17 +105,35 @@ def create_rag_tool(account_id: str = "cultpass"):
                     results.append((score, article))
             
             if not results:
-                return "No relevant information found in the knowledge base."
+                return json.dumps({
+                    "success": False,
+                    "query": query,
+                    "articles": [],
+                    "message": "No relevant information found in the knowledge base."
+                })
             
             # Sort by score and return top 3
             results.sort(key=lambda x: x[0], reverse=True)
             top_results = results[:3]
             
-            response = "Relevant information from knowledge base:\n\n"
+            articles_list = []
             for score, article in top_results:
-                response += f"**{article['title']}**\n{article['content']}\n\n"
+                # Create excerpt (first 200 chars)
+                excerpt = article['content'][:200] + "..." if len(article['content']) > 200 else article['content']
+                articles_list.append({
+                    "title": article['title'],
+                    "excerpt": excerpt,
+                    "content": article['content'],
+                    "tags": article['tags'],
+                    "relevance_score": score,
+                })
             
-            return response
+            return json.dumps({
+                "success": True,
+                "query": query,
+                "articles": articles_list,
+                "count": len(articles_list)
+            })
         
         return search_knowledge_base
     
@@ -122,20 +145,69 @@ def create_rag_tool(account_id: str = "cultpass"):
             query: The search query about CultPass features, policies, or procedures.
         
         Returns:
-            Relevant information from the knowledge base.
+            JSON string with structured knowledge base results including article titles and excerpts.
         """
         try:
-            docs = vectorstore.similarity_search(query, k=3)
+            # Try with score first, fallback to without score
+            try:
+                docs_with_scores = vectorstore.similarity_search_with_score(query, k=3)
+                docs = docs_with_scores
+                has_scores = True
+            except AttributeError:
+                # Fallback if method doesn't exist
+                docs = vectorstore.similarity_search(query, k=3)
+                has_scores = False
+            
             if not docs:
-                return "No relevant information found in the knowledge base."
+                return json.dumps({
+                    "success": False,
+                    "query": query,
+                    "articles": [],
+                    "message": "No relevant information found in the knowledge base."
+                })
             
-            response = "Relevant information from knowledge base:\n\n"
-            for doc in docs:
-                response += f"{doc.page_content}\n\n"
+            articles_list = []
+            for item in docs:
+                if has_scores:
+                    doc, score = item
+                else:
+                    doc = item
+                    score = 0.5  # Default score if not available
+                # Extract title from doc content (format: "Title: ...\nContent: ...")
+                content = doc.page_content
+                title = "Unknown"
+                article_content = content
+                
+                if "Title:" in content:
+                    parts = content.split("Content:", 1)
+                    if len(parts) == 2:
+                        title = parts[0].replace("Title:", "").strip()
+                        article_content = parts[1].strip()
+                
+                # Create excerpt
+                excerpt = article_content[:200] + "..." if len(article_content) > 200 else article_content
+                
+                articles_list.append({
+                    "title": title,
+                    "excerpt": excerpt,
+                    "content": article_content,
+                    "relevance_score": float(1.0 - score) if score < 1.0 else 0.9,  # Convert distance to similarity
+                })
             
-            return response
+            return json.dumps({
+                "success": True,
+                "query": query,
+                "articles": articles_list,
+                "count": len(articles_list)
+            })
         except Exception as e:
-            return f"Error searching knowledge base: {str(e)}"
+            # Fallback to keyword matching if vector search fails
+            return json.dumps({
+                "success": False,
+                "query": query,
+                "articles": [],
+                "error": f"Error searching knowledge base: {str(e)}"
+            })
     
     return search_knowledge_base
 

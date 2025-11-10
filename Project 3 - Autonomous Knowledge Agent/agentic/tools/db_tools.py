@@ -1,6 +1,7 @@
 """Database query tools for accessing CultPass and UDA-Hub databases."""
 
 import os
+import json
 from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine
 from langchain_core.tools import tool
@@ -36,7 +37,7 @@ def create_user_lookup_tool():
             email: The email address to lookup (e.g., 'alice@example.com').
         
         Returns:
-            User information including name, email, blocked status, and subscription details.
+            JSON string with structured user information.
         """
         engine = _get_cultpass_engine()
         
@@ -47,33 +48,45 @@ def create_user_lookup_tool():
             elif email:
                 user = session.query(cultpass.User).filter_by(email=email).first()
             else:
-                return "Error: Please provide either user_id or email."
+                return json.dumps({
+                    "success": False,
+                    "error": "Please provide either user_id or email."
+                })
             
             if not user:
-                return f"User not found with {'user_id' if user_id else 'email'}: {user_id or email}"
+                return json.dumps({
+                    "success": False,
+                    "error": f"User not found with {'user_id' if user_id else 'email'}: {user_id or email}"
+                })
             
-            subscription_info = ""
+            # Build structured response
+            result = {
+                "success": True,
+                "user": {
+                    "user_id": user.user_id,
+                    "full_name": user.full_name,
+                    "email": user.email,
+                    "is_blocked": user.is_blocked,
+                }
+            }
+            
             if user.subscription:
                 sub = user.subscription
-                subscription_info = (
-                    f"\nSubscription: {sub.tier} tier, Status: {sub.status}, "
-                    f"Monthly Quota: {sub.monthly_quota}"
-                )
+                result["subscription"] = {
+                    "tier": sub.tier,
+                    "status": sub.status,
+                    "monthly_quota": sub.monthly_quota,
+                    "started_at": str(sub.started_at) if sub.started_at else None,
+                }
             
-            reservations_info = ""
             if user.reservations:
-                reservations_info = f"\nReservations: {len(user.reservations)} total"
-                active = [r for r in user.reservations if r.status == "reserved"]
-                if active:
-                    reservations_info += f" ({len(active)} active)"
+                active_reservations = [r for r in user.reservations if r.status == "reserved"]
+                result["reservations"] = {
+                    "total": len(user.reservations),
+                    "active": len(active_reservations),
+                }
             
-            return (
-                f"User: {user.full_name} ({user.email})\n"
-                f"User ID: {user.user_id}\n"
-                f"Blocked: {user.is_blocked}"
-                f"{subscription_info}"
-                f"{reservations_info}"
-            )
+            return json.dumps(result)
     
     return lookup_user
 
@@ -89,7 +102,7 @@ def create_subscription_lookup_tool():
             user_id: The user ID to lookup subscription for.
         
         Returns:
-            Subscription information including tier, status, and quota.
+            JSON string with structured subscription information.
         """
         engine = _get_cultpass_engine()
         
@@ -97,19 +110,29 @@ def create_subscription_lookup_tool():
             user = session.query(cultpass.User).filter_by(user_id=user_id).first()
             
             if not user:
-                return f"User not found: {user_id}"
+                return json.dumps({
+                    "success": False,
+                    "error": f"User not found: {user_id}"
+                })
             
             if not user.subscription:
-                return f"User {user_id} has no subscription."
+                return json.dumps({
+                    "success": False,
+                    "error": f"User {user_id} has no subscription."
+                })
             
             sub = user.subscription
-            return (
-                f"Subscription for {user.full_name}:\n"
-                f"- Tier: {sub.tier}\n"
-                f"- Status: {sub.status}\n"
-                f"- Monthly Quota: {sub.monthly_quota}\n"
-                f"- Started: {sub.started_at}"
-            )
+            return json.dumps({
+                "success": True,
+                "user_id": user_id,
+                "user_name": user.full_name,
+                "subscription": {
+                    "tier": sub.tier,
+                    "status": sub.status,
+                    "monthly_quota": sub.monthly_quota,
+                    "started_at": str(sub.started_at) if sub.started_at else None,
+                }
+            })
     
     return lookup_subscription
 
@@ -126,7 +149,7 @@ def create_reservation_lookup_tool():
             status: Optional filter by status (e.g., 'reserved', 'cancelled', 'completed').
         
         Returns:
-            List of reservations with details.
+            JSON string with structured list of reservations.
         """
         engine = _get_cultpass_engine()
         
@@ -134,30 +157,44 @@ def create_reservation_lookup_tool():
             user = session.query(cultpass.User).filter_by(user_id=user_id).first()
             
             if not user:
-                return f"User not found: {user_id}"
+                return json.dumps({
+                    "success": False,
+                    "error": f"User not found: {user_id}"
+                })
             
             reservations = user.reservations
             if status:
                 reservations = [r for r in reservations if r.status == status]
             
             if not reservations:
-                status_text = f" with status '{status}'" if status else ""
-                return f"No reservations found for user {user_id}{status_text}."
+                return json.dumps({
+                    "success": True,
+                    "user_id": user_id,
+                    "user_name": user.full_name,
+                    "filter_status": status,
+                    "reservations": []
+                })
             
-            result = f"Reservations for {user.full_name}:\n\n"
+            reservations_list = []
             for res in reservations:
                 exp = session.query(cultpass.Experience).filter_by(
                     experience_id=res.experience_id
                 ).first()
-                exp_title = exp.title if exp else "Unknown Experience"
-                result += (
-                    f"- Reservation ID: {res.reservation_id}\n"
-                    f"  Experience: {exp_title}\n"
-                    f"  Status: {res.status}\n"
-                    f"  Created: {res.created_at}\n\n"
-                )
+                reservations_list.append({
+                    "reservation_id": res.reservation_id,
+                    "experience_id": res.experience_id,
+                    "experience_title": exp.title if exp else "Unknown Experience",
+                    "status": res.status,
+                    "created_at": str(res.created_at) if res.created_at else None,
+                })
             
-            return result
+            return json.dumps({
+                "success": True,
+                "user_id": user_id,
+                "user_name": user.full_name,
+                "filter_status": status,
+                "reservations": reservations_list
+            })
     
     return lookup_reservations
 
@@ -174,7 +211,7 @@ def create_experience_lookup_tool():
             title_search: Search for experiences by title (partial match).
         
         Returns:
-            Experience information including title, description, location, and availability.
+            JSON string with structured experience information.
         """
         engine = _get_cultpass_engine()
         
@@ -185,16 +222,23 @@ def create_experience_lookup_tool():
                 ).first()
                 
                 if not exp:
-                    return f"Experience not found: {experience_id}"
+                    return json.dumps({
+                        "success": False,
+                        "error": f"Experience not found: {experience_id}"
+                    })
                 
-                return (
-                    f"Experience: {exp.title}\n"
-                    f"Description: {exp.description}\n"
-                    f"Location: {exp.location}\n"
-                    f"When: {exp.when}\n"
-                    f"Slots Available: {exp.slots_available}\n"
-                    f"Premium: {exp.is_premium}"
-                )
+                return json.dumps({
+                    "success": True,
+                    "experience": {
+                        "experience_id": exp.experience_id,
+                        "title": exp.title,
+                        "description": exp.description,
+                        "location": exp.location,
+                        "when": str(exp.when) if exp.when else None,
+                        "slots_available": exp.slots_available,
+                        "is_premium": exp.is_premium,
+                    }
+                })
             
             elif title_search:
                 exps = session.query(cultpass.Experience).filter(
@@ -202,22 +246,35 @@ def create_experience_lookup_tool():
                 ).all()
                 
                 if not exps:
-                    return f"No experiences found matching: {title_search}"
+                    return json.dumps({
+                        "success": False,
+                        "error": f"No experiences found matching: {title_search}"
+                    })
                 
-                result = f"Found {len(exps)} experience(s):\n\n"
+                experiences_list = []
                 for exp in exps:
-                    result += (
-                        f"- {exp.title} (ID: {exp.experience_id})\n"
-                        f"  Location: {exp.location}\n"
-                        f"  When: {exp.when}\n"
-                        f"  Slots: {exp.slots_available}\n"
-                        f"  Premium: {exp.is_premium}\n\n"
-                    )
+                    experiences_list.append({
+                        "experience_id": exp.experience_id,
+                        "title": exp.title,
+                        "description": exp.description,
+                        "location": exp.location,
+                        "when": str(exp.when) if exp.when else None,
+                        "slots_available": exp.slots_available,
+                        "is_premium": exp.is_premium,
+                    })
                 
-                return result
+                return json.dumps({
+                    "success": True,
+                    "search_term": title_search,
+                    "count": len(experiences_list),
+                    "experiences": experiences_list
+                })
             
             else:
-                return "Error: Please provide either experience_id or title_search."
+                return json.dumps({
+                    "success": False,
+                    "error": "Please provide either experience_id or title_search."
+                })
     
     return lookup_experience
 
