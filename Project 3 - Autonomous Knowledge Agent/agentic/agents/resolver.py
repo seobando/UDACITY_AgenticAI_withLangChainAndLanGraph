@@ -190,20 +190,28 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
                     "escalation_requested": True,
                 }
             
-            # If KB search found no results, escalate
+            # If KB search found no results, try DB tools if classification suggests it
+            # Don't escalate immediately - allow DB tools to be used
             if kb_searched and not kb_has_results:
+                issue_type = classification.get("issue_type", "") if classification else ""
                 logger.info(
-                    "No KB results found - escalating",
+                    "No KB results found - will try DB tools if applicable",
                     extra={
                         "agent": "resolver",
                         "thread_id": thread_id,
+                        "issue_type": issue_type,
                     }
                 )
-                return {
-                    "messages": [AIMessage(content="I couldn't find relevant information in our knowledge base to help with your question. Let me escalate this to a human support agent who can assist you better.")],
-                    "resolution_attempted": True,
-                    "escalation_requested": True,
-                }
+                # Continue to let LLM decide if DB tools should be used
+                # Don't escalate yet - add a note that KB didn't have results
+                kb_no_results_note = (
+                    "Note: No relevant knowledge base articles were found for this query. "
+                    "You may need to use database lookup tools (lookup_user, lookup_subscription, etc.) "
+                    "if the query is about specific user data. If you cannot resolve with available tools, escalate."
+                )
+                conversation_messages.append(
+                    SystemMessage(content=kb_no_results_note)
+                )
             
             # Get initial response from LLM (may include additional tool calls)
             response = llm_with_tools.invoke(conversation_messages)
@@ -305,18 +313,56 @@ def create_resolver_agent(llm: ChatOpenAI, tools: List[Tool]):
                 
                 # Extract just the final AI message content
                 if final_response and hasattr(final_response, 'content') and final_response.content:
+                    # Check if response indicates escalation is needed
+                    response_content = final_response.content.lower()
+                    if any(phrase in response_content for phrase in ["cannot help", "unable to", "escalate", "human agent", "support agent"]):
+                        logger.info(
+                            "LLM response indicates escalation needed",
+                            extra={
+                                "agent": "resolver",
+                                "thread_id": thread_id,
+                            }
+                        )
+                        return {
+                            "messages": [AIMessage(content=final_response.content)],
+                            "resolution_attempted": True,
+                            "escalation_requested": True,
+                        }
+                    
                     return {
                         "messages": [AIMessage(content=final_response.content)],
                         "resolution_attempted": True,
                     }
                 else:
-                    # If final response is empty, use a default message
+                    # If final response is empty, check if we tried tools but still can't help
+                    if not kb_has_results:
+                        return {
+                            "messages": [AIMessage(content="I've tried to look up information, but I'm unable to find what you need. Let me escalate this to a human support agent who can assist you better.")],
+                            "resolution_attempted": True,
+                            "escalation_requested": True,
+                        }
                     return {
                         "messages": [AIMessage(content="I've looked up the information, but I'm having trouble formulating a response. Please try rephrasing your question.")],
                         "resolution_attempted": True,
                     }
             
-            # If no tool calls, return the response directly
+            # If no tool calls and no KB results, escalate
+            # Only escalate if LLM didn't call any tools (meaning it can't help even with DB tools)
+            if kb_searched and not kb_has_results and not tool_calls:
+                logger.info(
+                    "No KB results and no tool calls - escalating",
+                    extra={
+                        "agent": "resolver",
+                        "thread_id": thread_id,
+                    }
+                )
+                return {
+                    "messages": [AIMessage(content="I couldn't find relevant information in our knowledge base to help with your question. Let me escalate this to a human support agent who can assist you better.")],
+                    "resolution_attempted": True,
+                    "escalation_requested": True,
+                }
+            
+            # If no tool calls but KB had results, return the response
             if response and hasattr(response, 'content') and response.content:
                 return {
                     "messages": [AIMessage(content=response.content)],

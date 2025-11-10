@@ -88,20 +88,46 @@ def create_rag_tool(account_id: str = "cultpass"):
             Returns:
                 JSON string with structured knowledge base results including article titles and excerpts.
             """
+            import re
+            
+            # Tokenize query - split into words, remove common stop words
             query_lower = query.lower()
+            stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'i', 'my', 'me', 'how', 'do', 'what', 'is', 'are', 'can', 'to', 'check', 'my'}
+            query_tokens = set(re.findall(r'\b\w+\b', query_lower)) - stop_words
+            
             results = []
             
             for article in articles:
                 score = 0
-                # Simple keyword matching
-                if query_lower in article['title'].lower():
-                    score += 3
-                if query_lower in article['content'].lower():
-                    score += 2
-                if article['tags'] and query_lower in article['tags'].lower():
-                    score += 1
+                title_lower = article['title'].lower()
+                content_lower = article['content'].lower()
+                tags_lower = (article['tags'] or "").lower()
                 
-                if score > 0:
+                # Token-based matching: count overlapping keywords
+                title_tokens = set(re.findall(r'\b\w+\b', title_lower))
+                content_tokens = set(re.findall(r'\b\w+\b', content_lower))
+                tags_tokens = set(re.findall(r'\b\w+\b', tags_lower)) if article['tags'] else set()
+                
+                # Count token overlaps
+                title_overlap = len(query_tokens & title_tokens)
+                content_overlap = len(query_tokens & content_tokens)
+                tags_overlap = len(query_tokens & tags_tokens)
+                
+                # Score based on overlaps (weighted)
+                score += title_overlap * 3  # Title matches are most important
+                score += content_overlap * 2  # Content matches
+                score += tags_overlap * 1  # Tag matches
+                
+                # Also check for exact phrase matches (higher weight)
+                if query_lower in title_lower:
+                    score += 5
+                if query_lower in content_lower:
+                    score += 3
+                if article['tags'] and query_lower in tags_lower:
+                    score += 2
+                
+                # Match if at least 2 keywords overlap OR exact phrase match
+                if score >= 2:
                     results.append((score, article))
             
             if not results:
